@@ -1,0 +1,57 @@
+#include <ap_int.h>
+#include <ap_axi_sdata.h>
+#include <hls_stream.h>
+#include <cmath>
+#include <fstream>
+#include <iostream>
+
+typedef ap_axiu<32, 0, 0, 0> axis_t;
+union float_word_t { float value; unsigned int bits; };
+void predict_axi(hls::stream<axis_t>& in, hls::stream<axis_t>& out);
+
+int main() {
+    std::ifstream vectors("float_axi_vectors.txt");
+    if (!vectors) {
+        std::cerr << "ERROR: float_axi_vectors.txt is missing\n";
+        return 1;
+    }
+    hls::stream<axis_t> input, output;
+    for (int sample = 0; sample < {{ n_samples }}; ++sample) {
+        float feature[{{ n_features }}], expected[{{ n_outputs }}];
+        for (int i = 0; i < {{ n_features }}; ++i) {
+            if (!(vectors >> feature[i])) return 2;
+        }
+        for (int c = 0; c < {{ n_outputs }}; ++c) {
+            if (!(vectors >> expected[c])) return 3;
+        }
+        for (int i = 0; i < {{ n_features }}; ++i) {
+            float_word_t encoded;
+            encoded.value = feature[i];
+            axis_t word;
+            word.data = encoded.bits;
+            word.keep = 15;
+            word.strb = 15;
+            word.last = sample == {{ n_samples - 1 }} && i == {{ n_features - 1 }};
+            input.write(word);
+        }
+        predict_axi(input, output);
+        for (int c = 0; c < {{ n_outputs }}; ++c) {
+            if (output.empty()) return 4;
+            axis_t result = output.read();
+            float_word_t decoded;
+            decoded.bits = result.data.to_uint();
+            const bool expected_last = sample == {{ n_samples - 1 }} && c == {{ n_outputs - 1 }};
+            if (!std::isfinite(decoded.value) || std::fabs(decoded.value - expected[c]) > 1.0e-5f ||
+                bool(result.last) != expected_last || result.keep != 15 || result.strb != 15) {
+                std::cerr << "ERROR: float AXI mismatch at sample " << sample
+                          << " output " << c << ": actual=" << decoded.value
+                          << " expected=" << expected[c] << "\n";
+                return 5;
+            }
+        }
+    }
+    float extra;
+    if (vectors >> extra || !output.empty()) return 6;
+    std::cout << "CAMBIUM_FLOAT_AXIS_VALIDATED {{ n_samples }}\n";
+    return 0;
+}

@@ -2,8 +2,7 @@
 #include <ap_axi_sdata.h>
 #include <hls_stream.h>
 
-// Cambium signed fixed-point forest, quantized to {{ fixed_total_bits }} total bits
-// with {{ fixed_frac_bits }} fractional bits. Primitive ROMs are visible to HLS.
+// Primitive tree ROMs avoid synthesis of aggregate TreeData objects.
 static const int TREES = {{ n_trees_per_target }};
 static const int FORESTS = {{ n_forests }};
 static const int TOTAL_TREES = {{ n_forests * n_trees_per_target }};
@@ -11,29 +10,29 @@ static const int FEATURES = {{ n_features }};
 static const int OUTPUTS = {{ n_targets }};
 static const int DEPTH = {{ max_depth }};
 static const int NODES = {{ max_nodes }};
-static const int WIDTH = {{ fixed_total_bits }};
 typedef ap_axiu<32,0,0,0> axis_t;
+union float_word_t { float value; unsigned int bits; };
 
 static const unsigned int FEATURE[TOTAL_TREES][NODES] = {
 {% for tree in flat_trees %}
   { {% for value in tree.features %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
 {% endfor %}
 };
-static const int THRESHOLD[TOTAL_TREES][NODES] = {
+static const float THRESHOLD[TOTAL_TREES][NODES] = {
 {% for tree in flat_trees %}
-  { {% for value in tree.threshold_codes %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
+  { {% for value in tree.thresholds %}{{ "%.9e"|format(value) }}f{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
 {% endfor %}
 };
 {% if is_classification %}
-static const int VALUE[TOTAL_TREES][NODES][OUTPUTS] = {
+static const float VALUE[TOTAL_TREES][NODES][OUTPUTS] = {
 {% for tree in flat_trees %}
-  { {% for row in tree.value_codes %}{ {% for value in row %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
+  { {% for row in tree.node_values %}{ {% for value in row %}{{ "%.9e"|format(value) }}f{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
 {% endfor %}
 };
 {% else %}
-static const int VALUE[TOTAL_TREES][NODES] = {
+static const float VALUE[TOTAL_TREES][NODES] = {
 {% for tree in flat_trees %}
-  { {% for value in tree.value_codes %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
+  { {% for value in tree.node_values %}{{ "%.9e"|format(value) }}f{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
 {% endfor %}
 };
 {% endif %}
@@ -57,20 +56,20 @@ void predict_axi(hls::stream<axis_t>& in, hls::stream<axis_t>& out) {
 #pragma HLS INTERFACE axis port=in
 #pragma HLS INTERFACE axis port=out
 #pragma HLS INTERFACE ap_ctrl_none port=return
-    int features[FEATURES];
+    float features[FEATURES];
 #pragma HLS ARRAY_PARTITION variable=features complete
     bool batch_last = false;
     for (int j=0; j<FEATURES; ++j) {
 #pragma HLS PIPELINE II=1
         axis_t word = in.read();
-        ap_int<WIDTH> signed_code;
-        signed_code.range(WIDTH-1,0) = word.data.range(WIDTH-1,0);
-        features[j] = int(signed_code);
+        float_word_t decoded;
+        decoded.bits = word.data.to_uint();
+        features[j] = decoded.value;
         if (j == FEATURES-1) batch_last = bool(word.last);
     }
-    long long total[OUTPUTS];
+    float total[OUTPUTS];
 #pragma HLS ARRAY_PARTITION variable=total complete
-    for (int c=0; c<OUTPUTS; ++c) total[c] = 0;
+    for (int c=0; c<OUTPUTS; ++c) total[c] = 0.0f;
 {% if is_classification %}
     for (int tree=0; tree<TREES; ++tree) {
         const int index = tree;
@@ -99,9 +98,10 @@ void predict_axi(hls::stream<axis_t>& in, hls::stream<axis_t>& out) {
     }
     for (int c=0; c<OUTPUTS; ++c) {
 #pragma HLS PIPELINE II=1
-        int average = int(total[c] / TREES);
+        float_word_t encoded;
+        encoded.value = total[c] / TREES;
         axis_t result;
-        result.data = ap_uint<WIDTH>(average);
+        result.data = encoded.bits;
         result.keep = 15;
         result.strb = 15;
         result.last = batch_last && c == OUTPUTS-1;

@@ -7,7 +7,7 @@
 {% if precision == 'float' %}
 union float_bits {
     float f;
-    ap_uint<32> i;
+    unsigned int i;
 };
 
 inline ap_uint<32> feature_to_bits(feature_t val) {
@@ -18,7 +18,7 @@ inline ap_uint<32> feature_to_bits(feature_t val) {
 
 inline feature_t bits_to_feature(ap_uint<32> val) {
     float_bits bits;
-    bits.i = val;
+    bits.i = val.to_uint();
     return bits.f;
 }
 
@@ -30,7 +30,7 @@ inline ap_uint<32> score_to_bits(score_t val) {
 
 inline score_t bits_to_score(ap_uint<32> val) {
     float_bits bits;
-    bits.i = val;
+    bits.i = val.to_uint();
     return bits.f;
 }
 {% else %}

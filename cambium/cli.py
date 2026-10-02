@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 import yaml
 
 from .framework import CambiumFramework, create_sample_config
@@ -121,6 +122,7 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         model_group = train_parser.add_argument_group("Model Options")
         model_group.add_argument("--n-estimators", type=int, default=20, help="Number of estimators")
         model_group.add_argument("--max-depth", type=int, default=6, help="Maximum tree depth")
+        model_group.add_argument("--max-leaf-nodes", type=int, help="Maximum leaf nodes per trained tree")
         model_group.add_argument(
             "--task",
             choices=["regression", "classification"],
@@ -139,6 +141,11 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
     def _add_export_parser(self, subparsers, parent_parser) -> None:
         export_parser = subparsers.add_parser("export", help="Export trained model", parents=[parent_parser])
         export_parser.add_argument("--model", "-m", required=True, help="Path to trained model file")
+        export_parser.add_argument("--config", "-c", help="Saved Cambium YAML/JSON config (defaults to model directory)")
+        export_parser.add_argument("--data", "-d", help="Dataset used for training, when saved test vectors are unavailable")
+        export_parser.add_argument("--features", "-f", help="Comma-separated feature columns")
+        export_parser.add_argument("--targets", "-t", help="Comma-separated target columns")
+        export_parser.add_argument("--task", choices=["regression", "classification"], help="Model task when no saved config exists")
         export_parser.add_argument("--target", choices=["hls"], default="hls", help="Export target format")
         export_parser.add_argument("--output", "-o", default="cambium_export", help="Output directory")
         export_parser.add_argument("--export-format", choices=["default", "legacy"], default="legacy", help="Export format")
@@ -147,9 +154,10 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             "--precision",
             help="Precision override: float, fixed, ap_fixed<18,8>, or shorthand like 18.8",
         )
-        export_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], default="vivado_hls", help="HLS synthesis backend")
-        export_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi"],
-                                   help="HLS datapath (auto selects integer AXI for fixed-point Vitis regression)")
+        export_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], help="HLS synthesis backend")
+        export_parser.add_argument("--max-nodes", type=int, help="Minimum HLS node-array capacity per tree")
+        export_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi", "float_axi"],
+                                   help="HLS datapath (auto selects primitive ROM AXI for Vitis models)")
         export_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
 
     def _add_quickstart_parser(self, subparsers, parent_parser) -> None:
@@ -162,6 +170,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         quick_parser.add_argument("--jinja2", action="store_true", help="Use Jinja2 templates")
         quick_parser.add_argument("--n-estimators", type=int, default=None, help="Number of estimators (overrides config when set)")
         quick_parser.add_argument("--max-depth", type=int, default=None, help="Maximum tree depth (overrides config when set)")
+        quick_parser.add_argument("--max-leaf-nodes", type=int, help="Maximum leaf nodes per trained tree")
+        quick_parser.add_argument("--max-nodes", type=int, help="Minimum HLS node-array capacity per tree")
         quick_parser.add_argument(
             "--task",
             choices=["regression", "classification"],
@@ -173,8 +183,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         )
         quick_parser.add_argument("--config", "-c", help="Configuration file (YAML/JSON)")
         quick_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], default="vivado_hls", help="HLS synthesis backend")
-        quick_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi"],
-                                  help="HLS datapath (auto selects integer AXI for fixed-point Vitis regression)")
+        quick_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi", "float_axi"],
+                                  help="HLS datapath (auto selects primitive ROM AXI for Vitis models)")
         quick_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
         quick_parser.add_argument("--fpga-part", type=str, help="FPGA part number override")
         quick_parser.add_argument("--clock-period", type=float, help="Clock period in ns")
@@ -231,6 +241,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         if args.config:
             framework = CambiumFramework(args.config)
             logger.info("Using configuration from: %s", args.config)
+            if getattr(args, "command", None) == "export" and getattr(args, "backend", None):
+                framework.config.set_backend(args.backend)
         else:
             framework = CambiumFramework()
             framework.config.config["project"]["output_dir"] = args.output
@@ -240,12 +252,16 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
                 framework.config.config["model"]["n_estimators"] = args.n_estimators
             if getattr(args, "max_depth", None) is not None:
                 framework.config.config["model"]["max_depth"] = args.max_depth
+            if getattr(args, "max_leaf_nodes", None) is not None:
+                framework.config.config["model"]["max_leaf_nodes"] = args.max_leaf_nodes
+            if getattr(args, "max_nodes", None) is not None:
+                framework.config.config["export"]["max_nodes"] = args.max_nodes
             if getattr(args, "task", None):
                 framework.config.config["model"]["task"] = args.task
             if hasattr(args, "test_size"):
                 framework.config.config["data"]["test_size"] = args.test_size
 
-            backend = getattr(args, "backend", "vivado_hls")
+            backend = getattr(args, "backend", None) or "vivado_hls"
             framework.config.set_backend(backend)
             if backend == "vitis_hls":
                 framework.config.config["hls"]["vitis_flow_target"] = getattr(args, "vitis_flow", "hw")
@@ -257,6 +273,10 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
                     framework.config.config["hls"]["clock_period"] = f"{args.clock_period}ns"
 
         self._apply_precision_override(framework, getattr(args, "precision", None))
+        if getattr(args, "max_nodes", None) is not None:
+            framework.config.config["export"]["max_nodes"] = args.max_nodes
+        if getattr(args, "max_leaf_nodes", None) is not None:
+            framework.config.config["model"]["max_leaf_nodes"] = args.max_leaf_nodes
         if getattr(args, "implementation", None):
             framework.config.config["export"]["implementation"] = args.implementation
         return framework
@@ -298,8 +318,39 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         with model_path.open("rb") as file:
             model = pickle.load(file)
 
+        if not args.config:
+            sibling_config = model_path.parent / "cambium_config.yaml"
+            if sibling_config.exists():
+                args.config = str(sibling_config)
         framework = self._build_framework(args)
         framework.model = model
+        if args.task:
+            framework.config.config["model"]["task"] = args.task
+        elif not args.config:
+            framework.config.config["model"]["task"] = (
+                "classification" if hasattr(model, "classes_") else "regression"
+            )
+
+        saved_x = model_path.parent / "X_test.npy"
+        if saved_x.exists() and args.config and not args.data:
+            framework.data_manager.feature_cols = list(framework.config.config["data"].get("feature_cols") or [])
+            framework.data_manager.target_cols = list(framework.config.config["data"].get("target_cols") or [])
+            if not framework.data_manager.feature_cols or not framework.data_manager.target_cols:
+                raise ValueError("Saved config lacks feature or target columns; provide --data, --features, and --targets")
+            framework._split_cache = (None, np.load(saved_x), None, None)
+            for name in ("scaler_x", "scaler_y"):
+                path = model_path.parent / f"{name}.pkl"
+                if path.exists():
+                    with path.open("rb") as file:
+                        setattr(framework.data_manager, name, pickle.load(file))
+        else:
+            source = args.data or framework.config.config["data"].get("source")
+            if not source:
+                raise ValueError("Export requires saved X_test.npy or --data")
+            features = _parse_csv_columns(args.features) or framework.config.config["data"].get("feature_cols")
+            targets = _parse_csv_columns(args.targets) or framework.config.config["data"].get("target_cols")
+            framework.load_data(source, features, targets)
+            framework._split_cache = framework.data_manager.prepare_data()
         logger.info("Exporting to HLS (%s)...", framework.config.backend.backend)
         framework.export_to_hls_j2(args.output)
 
@@ -320,6 +371,10 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
                 framework.config.config["model"]["n_estimators"] = args.n_estimators
             if args.max_depth is not None:
                 framework.config.config["model"]["max_depth"] = args.max_depth
+            if args.max_leaf_nodes is not None:
+                framework.config.config["model"]["max_leaf_nodes"] = args.max_leaf_nodes
+            if args.max_nodes is not None:
+                framework.config.config["export"]["max_nodes"] = args.max_nodes
             if args.task:
                 framework.config.config["model"]["task"] = args.task
 

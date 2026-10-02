@@ -34,6 +34,7 @@ class ModelTrainer:
                 base_model = RandomForestRegressor(
                     n_estimators=model_config["n_estimators"],
                     max_depth=model_config["max_depth"],
+                    max_leaf_nodes=model_config.get("max_leaf_nodes"),
                     random_state=model_config["random_state"],
                 )
                 self.model = MultiOutputRegressor(base_model) if y_train.shape[1] > 1 else base_model
@@ -41,6 +42,7 @@ class ModelTrainer:
                 self.model = RandomForestClassifier(
                     n_estimators=model_config["n_estimators"],
                     max_depth=model_config["max_depth"],
+                    max_leaf_nodes=model_config.get("max_leaf_nodes"),
                     random_state=model_config["random_state"],
                 )
 

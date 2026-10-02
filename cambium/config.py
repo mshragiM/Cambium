@@ -85,6 +85,7 @@ class CambiumConfig:
                 "task": "regression",
                 "n_estimators": 40,
                 "max_depth": 6,
+                "max_leaf_nodes": None,
                 "random_state": 42,
             },
             "data": {

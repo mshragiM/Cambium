@@ -87,14 +87,16 @@ This will:
 
 ## Precision Support
 
-### Vitis HLS fixed-point regression on AXI4-Stream
+### Vitis HLS regression and classification on AXI4-Stream
 
-For a single-output random-forest regressor, `--backend vitis_hls` with a
-fixed-point precision now selects the integer-ROM AXI implementation by default.
-It stores tree thresholds and leaves as primitive signed integer arrays, which
-avoids the constant-zero RTL produced by the earlier aggregate `ap_fixed`
-tree representation in Vitis HLS 2024.1. The generated testbench checks every
-prediction code and `TLAST`, `TKEEP`, and `TSTRB` exactly in C and RTL
+For regression (one or several targets) and single-label classification,
+`--backend vitis_hls` now selects a
+primitive-ROM AXI implementation by default. Fixed-point models store tree
+thresholds and leaves as signed integer arrays; float models use primitive
+float arrays. This avoids the constant-zero RTL produced by the earlier
+aggregate tree representation in Vitis HLS 2024.1. The generated testbench
+checks fixed-point prediction codes exactly and float predictions to within
+`1e-5`; it checks `TLAST`, `TKEEP`, and `TSTRB` exactly in C and RTL
 co-simulation. A mismatch makes the HLS run fail.
 
 ```bash
@@ -109,17 +111,27 @@ The input is one 32-bit AXI4-Stream word per feature. Its low `W` bits contain
 a signed two's-complement fixed-point integer code for `ap_fixed<W,I>`; the
 remaining bits are ignored. Scale each already-preprocessed feature by
 `2^(W-I)` and round down before packing. Assert `TLAST` on the final feature
-of the final sample in a DMA batch. Each prediction is returned as one 32-bit
-word with the signed result code in the low `W` bits; decode it, divide by
-`2^(W-I)`, and undo target preprocessing on the host if needed. This is an
-IP-catalog export for DMA integration, not the original `float` bitcast format.
+of the final sample in a DMA batch. Each regression prediction or classification
+score is returned as one 32-bit word with the signed result code in the low
+`W` bits; decode it, divide by `2^(W-I)`, and undo target preprocessing on the
+host if needed. Classification returns one score per class, in
+`model.classes_` order. Float precision uses IEEE-754 binary32 words on input
+and output instead. Both paths produce an IP-catalog export for DMA integration.
 
 `--implementation auto` is the default; `--implementation struct` selects the
-older exporter. The integer path currently supports one regression target and
-up to 32 total fixed-point bits. Other model types continue to use the older
-exporter. It has been validated with Vitis HLS 2024.1 on a single-output
-regression model; other combinations still require C/RTL verification before
-hardware deployment.
+older exporter. The integer path supports regression or classification and up
+to 32 total fixed-point bits. Vitis HLS 2024.1 C/RTL co-simulation has validated
+single-output regression and classification at `ap_fixed<10,4>` and float,
+regression at `ap_fixed<18,8>`, classification at `ap_fixed<16,6>`, and
+two-output regression at `ap_fixed<10,4>` and float. Other precisions and boards
+require their own verification before deployment. The existing Vivado HLS
+export path remains available; Vivado HLS itself was not installed in this
+validation environment.
+
+Tree count (`--n-estimators`) and maximum depth (`--max-depth`) control the
+trained model. `--max-leaf-nodes` caps the number of leaves per trained tree.
+`--max-nodes` sets the minimum HLS array capacity; Cambium increases it when
+the trained tree needs more nodes, so it is not a training limit.
 
 Cambium supports precision overrides directly from the CLI.
 
@@ -176,8 +188,14 @@ python cambium_cli.py train --data data.csv --features f1,f2 --targets y --outpu
 ### 3) Export from saved model
 
 ```bash
-python cambium_cli.py export --model model.pkl --output out_dir --backend vivado_hls
+python cambium_cli.py export --model trained_dir/cambium_model.pkl --output out_dir
 ```
+
+When the model directory contains `cambium_config.yaml` and `X_test.npy`, export
+restores the original feature order, backend, precision, and held-out vectors.
+Use `--backend`, `--precision`, or `--implementation` to override those settings.
+For a model saved elsewhere, provide `--data`, `--features`, and `--targets`
+(and `--task` for classification) so Cambium can build verification vectors.
 
 ### 4) Create config template
 
