@@ -87,6 +87,40 @@ This will:
 
 ## Precision Support
 
+### Vitis HLS fixed-point regression on AXI4-Stream
+
+For a single-output random-forest regressor, `--backend vitis_hls` with a
+fixed-point precision now selects the integer-ROM AXI implementation by default.
+It stores tree thresholds and leaves as primitive signed integer arrays, which
+avoids the constant-zero RTL produced by the earlier aggregate `ap_fixed`
+tree representation in Vitis HLS 2024.1. The generated testbench checks every
+prediction code and `TLAST`, `TKEEP`, and `TSTRB` exactly in C and RTL
+co-simulation. A mismatch makes the HLS run fail.
+
+```bash
+cambium quick-start --data data.csv --features f1,f2 --targets y \
+  --backend vitis_hls --precision 10.4 --implementation integer_axi \
+  --output forest_hls
+cd forest_hls
+vitis_hls -f cambium_project.tcl
+```
+
+The input is one 32-bit AXI4-Stream word per feature. Its low `W` bits contain
+a signed two's-complement fixed-point integer code for `ap_fixed<W,I>`; the
+remaining bits are ignored. Scale each already-preprocessed feature by
+`2^(W-I)` and round down before packing. Assert `TLAST` on the final feature
+of the final sample in a DMA batch. Each prediction is returned as one 32-bit
+word with the signed result code in the low `W` bits; decode it, divide by
+`2^(W-I)`, and undo target preprocessing on the host if needed. This is an
+IP-catalog export for DMA integration, not the original `float` bitcast format.
+
+`--implementation auto` is the default; `--implementation struct` selects the
+older exporter. The integer path currently supports one regression target and
+up to 32 total fixed-point bits. Other model types continue to use the older
+exporter. It has been validated with Vitis HLS 2024.1 on a single-output
+regression model; other combinations still require C/RTL verification before
+hardware deployment.
+
 Cambium supports precision overrides directly from the CLI.
 
 Accepted forms:

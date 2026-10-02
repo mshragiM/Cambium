@@ -110,7 +110,9 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
             }
 
         total_bits, int_bits = self._parse_ap_fixed_type(self.precision_type)
-        required_accum_int_bits = self._bits_for_max_value(max(1, n_trees_per_target)) + 1
+        # A sum of N signed leaf values needs log2(N) guard bits beyond the
+        # per-leaf integer width before the final division by N.
+        required_accum_int_bits = int_bits + int(math.ceil(math.log2(max(1, n_trees_per_target))))
         accum_int_bits = max(int_bits, required_accum_int_bits)
         accum_total_bits = total_bits + max(0, accum_int_bits - int_bits)
 
@@ -214,6 +216,13 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
 
         if model is not None:
             model_max_nodes = self._get_model_max_nodes(model, task, output_dim)
+            forest_estimators = self._get_forest_estimators(model, task, output_dim)
+            n_trees_per_target = len(forest_estimators[0])
+            if any(len(forest) != n_trees_per_target for forest in forest_estimators):
+                raise ValueError('All output forests must contain the same number of trees')
+            model_max_depth = max(tree.tree_.max_depth for forest in forest_estimators for tree in forest)
+        else:
+            model_max_depth = 0
 
         max_nodes = max(configured_max_nodes, model_max_nodes)
         feature_index_bits = self._bits_for_max_value(max(0, n_features - 1))
@@ -223,8 +232,8 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
             "n_features": n_features,
             "n_targets": output_dim,
             "n_forests": n_forests,
-            "n_trees": self.config.config["model"]["n_estimators"],
-            "max_depth": self.config.config["model"]["max_depth"],
+            "n_trees": n_trees_per_target,
+            "max_depth": max(int(self.config.config["model"]["max_depth"]), model_max_depth),
             "max_nodes": max_nodes,
             "feature_index_bits": feature_index_bits,
             "node_index_bits": node_index_bits,
@@ -245,8 +254,6 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
         context.update(self._build_precision_context(n_trees_per_target))
 
         if model is not None:
-            forest_estimators = self._get_forest_estimators(model, task, output_dim)
-
             if model_max_nodes > configured_max_nodes:
                 logger.warning(
                     "Model requires %s nodes per tree, increasing MAX_NNODES from %s to %s.",
@@ -307,15 +314,81 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
             logger.info("Generated %s/%s", self.output_dir.name, output_name)
         return generated_files
 
+    def generate_integer_axi(self, model: Any, data_manager: DataManager) -> str:
+        """Emit a fixed-point forest as primitive integer ROMs for Vitis HLS.
+
+        Aggregate-initialized ap_fixed TreeData objects can simulate correctly
+        yet fold to zero in Vitis HLS 2024.1. Quantizing the trained forest to
+        signed integer codes avoids that synthesis discrepancy.
+        """
+        if self.config.config['model']['task'] != 'regression' or len(data_manager.target_cols) != 1:
+            raise ValueError('Integer AXIS backend currently supports one regression target')
+        if not re.fullmatch(r'ap_fixed\s*<\s*\d+\s*,\s*\d+\s*>', self.precision_type):
+            raise ValueError('Integer AXIS requires ap_fixed<W,I> with truncation and wrap semantics')
+        total_bits, int_bits = self._parse_ap_fixed_type(self.precision_type)
+        if total_bits < 2 or int_bits < 1:
+            raise ValueError('Integer AXIS backend requires at least two total bits and one integer bit')
+        context = self._build_context(data_manager, model)
+        scale = 1 << (total_bits - int_bits)
+        lower, upper = -(1 << (total_bits - 1)), (1 << (total_bits - 1)) - 1
+        def code(value):
+            raw = math.floor(float(value) * scale)
+            if raw < lower or raw > upper:
+                raise ValueError(f'Cambium fixed-point table value out of range: {value}')
+            return raw
+        for tree in context['tree_data'][0]:
+            tree['threshold_codes'] = [code(value) for value in tree['thresholds']]
+            tree['value_codes'] = [code(value) for value in tree['node_values']]
+        max_leaf = max(abs(value) for tree in context['tree_data'][0] for value in tree['value_codes'])
+        if max_leaf * context['n_trees_per_target'] >= 1 << 63:
+            raise ValueError('Forest accumulation exceeds signed 64-bit range')
+        context.update(fixed_total_bits=total_bits, fixed_frac_bits=total_bits - int_bits)
+        rendered = self.env.get_template('firmware/integer_axi.cpp.j2').render(**context)
+        target = self.output_dir / 'cambium_integer_axi.cpp'
+        target.write_text(rendered, encoding='utf-8')
+        return str(target)
+
+    def generate_integer_testbench(self, model: Any, x_test: np.ndarray) -> List[str]:
+        """Write an exact integer reference and the AXI C/RTL testbench."""
+        total_bits, int_bits = self._parse_ap_fixed_type(self.precision_type)
+        scale = 1 << (total_bits - int_bits)
+        lower, upper = -(1 << (total_bits - 1)), (1 << (total_bits - 1)) - 1
+        x = np.asarray(x_test, dtype=np.float64)
+        if x.ndim != 2 or x.shape[1] != model.n_features_in_ or len(x) == 0:
+            raise ValueError('Test features must be a nonempty matrix matching the trained model')
+        if not np.all(np.isfinite(x)):
+            raise ValueError('Test features contain non-finite values')
+        codes = np.floor(x * scale).astype(np.int64)
+        if np.any((codes < lower) | (codes > upper)):
+            raise ValueError('Test feature overflows the selected fixed-point format')
+        totals = np.zeros(len(x), dtype=np.int64)
+        rows = np.arange(len(x))
+        for estimator in model.estimators_:
+            tree = estimator.tree_
+            nodes = np.zeros(len(x), dtype=np.int64)
+            for _ in range(tree.max_depth):
+                feature = tree.feature[nodes]
+                leaf = feature < 0
+                thresholds = np.floor(tree.threshold[nodes] * scale).astype(np.int64)
+                go_left = codes[rows, np.maximum(feature, 0)] <= thresholds
+                next_nodes = np.where(go_left, tree.children_left[nodes], tree.children_right[nodes])
+                nodes = np.where(leaf, nodes, next_nodes)
+            totals += np.floor(tree.value[nodes, 0, 0] * scale).astype(np.int64)
+        tree_count = len(model.estimators_)
+        averages = np.where(totals >= 0, totals // tree_count, -((-totals) // tree_count))
+        if np.any((averages < lower) | (averages > upper)):
+            raise ValueError('Forest output overflows the selected fixed-point format')
+        vectors = self.output_dir / 'integer_axi_vectors.txt'
+        np.savetxt(vectors, np.column_stack((codes, averages)), fmt='%d')
+        testbench = self.output_dir / 'integer_axi_tb.cpp'
+        rendered = self.env.get_template('test/integer_axi_tb.cpp.j2').render(
+            n_features=x.shape[1], n_samples=len(x), fixed_total_bits=total_bits)
+        testbench.write_text(rendered, encoding='utf-8')
+        return [str(testbench), str(vectors)]
+
     def generate_implementation(self, model: Any, data_manager: DataManager) -> List[str]:
         generated_files: List[str] = []
         context = self._build_context(data_manager, model)
-        context.update(
-            {
-                "n_targets": len(data_manager.target_cols),
-                "n_trees": self.config.config["model"]["n_estimators"],
-            }
-        )
         implementations = [
             ("firmware/myproj_axi.cpp.j2", "myproj_axi.cpp"),
             ("firmware/myproj_core.cpp.j2", "myproj_core.cpp"),

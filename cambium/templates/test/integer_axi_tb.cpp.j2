@@ -1,0 +1,49 @@
+#include <ap_int.h>
+#include <ap_axi_sdata.h>
+#include <hls_stream.h>
+#include <fstream>
+#include <iostream>
+
+typedef ap_axiu<32, 0, 0, 0> axis_t;
+void predict_axi(hls::stream<axis_t>& in, hls::stream<axis_t>& out);
+
+int main() {
+    std::ifstream vectors("integer_axi_vectors.txt");
+    if (!vectors) {
+        std::cerr << "ERROR: integer_axi_vectors.txt is missing\n";
+        return 1;
+    }
+    hls::stream<axis_t> input, output;
+    int count = 0;
+    while (count < {{ n_samples }}) {
+        int feature[{{ n_features }}], expected;
+        for (int i = 0; i < {{ n_features }}; ++i) {
+            if (!(vectors >> feature[i])) return 2;
+        }
+        if (!(vectors >> expected)) return 3;
+        for (int i = 0; i < {{ n_features }}; ++i) {
+            axis_t word;
+            word.data = ap_uint<{{ fixed_total_bits }}>(feature[i]);
+            word.keep = 15;
+            word.strb = 15;
+            word.last = (count == {{ n_samples - 1 }} && i == {{ n_features - 1 }});
+            input.write(word);
+        }
+        predict_axi(input, output);
+        if (output.empty()) return 4;
+        axis_t result = output.read();
+        ap_int<{{ fixed_total_bits }}> actual;
+        actual.range({{ fixed_total_bits - 1 }}, 0) = result.data.range({{ fixed_total_bits - 1 }}, 0);
+        if (int(actual) != expected || bool(result.last) != (count == {{ n_samples - 1 }}) ||
+            result.keep != 15 || result.strb != 15) {
+            std::cerr << "ERROR: integer AXI mismatch at sample " << count
+                      << ": actual=" << int(actual) << " expected=" << expected << "\n";
+            return 5;
+        }
+        ++count;
+    }
+    int extra;
+    if (vectors >> extra || !output.empty()) return 6;
+    std::cout << "CAMBIUM_EXACT_AXIS_VALIDATED " << count << "\n";
+    return 0;
+}

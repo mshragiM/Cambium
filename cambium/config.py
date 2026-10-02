@@ -98,6 +98,7 @@ class CambiumConfig:
                 "max_nodes": 128,
                 "optimization": "speed",
                 "format": "default",
+                "implementation": "auto",
             },
             "hls": {
                 "backend": "vivado_hls",

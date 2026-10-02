@@ -148,6 +148,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             help="Precision override: float, fixed, ap_fixed<18,8>, or shorthand like 18.8",
         )
         export_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], default="vivado_hls", help="HLS synthesis backend")
+        export_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi"],
+                                   help="HLS datapath (auto selects integer AXI for fixed-point Vitis regression)")
         export_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
 
     def _add_quickstart_parser(self, subparsers, parent_parser) -> None:
@@ -171,6 +173,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         )
         quick_parser.add_argument("--config", "-c", help="Configuration file (YAML/JSON)")
         quick_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], default="vivado_hls", help="HLS synthesis backend")
+        quick_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi"],
+                                  help="HLS datapath (auto selects integer AXI for fixed-point Vitis regression)")
         quick_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
         quick_parser.add_argument("--fpga-part", type=str, help="FPGA part number override")
         quick_parser.add_argument("--clock-period", type=float, help="Clock period in ns")
@@ -253,6 +257,8 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
                     framework.config.config["hls"]["clock_period"] = f"{args.clock_period}ns"
 
         self._apply_precision_override(framework, getattr(args, "precision", None))
+        if getattr(args, "implementation", None):
+            framework.config.config["export"]["implementation"] = args.implementation
         return framework
 
     def _handle_train(self, args) -> int:

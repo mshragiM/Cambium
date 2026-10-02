@@ -57,23 +57,45 @@ class CambiumFramework:
             self.config.config["project"]["output_dir"] = output_dir
 
         self.code_generator = Jinja2HLSCodeGenerator(self.config)
-        generated_files = {
-            "headers": self.code_generator.generate_headers(self.model, self.data_manager),
-            "implementation": self.code_generator.generate_implementation(self.model, self.data_manager),
-        }
+        implementation = self.config.config["export"].get("implementation", "auto")
+        if implementation not in {"auto", "struct", "integer_axi"}:
+            raise ValueError(f"Unknown HLS implementation: {implementation}")
+        if implementation == "auto":
+            integer_axi = (
+                self.config.backend.is_vitis()
+                and self.config.config["model"]["task"] == "regression"
+                and len(self.data_manager.target_cols) == 1
+                and self.code_generator.precision_type != "float"
+            )
+        else:
+            integer_axi = implementation == "integer_axi"
+        generated_files = {"headers": [], "implementation": []}
+        if integer_axi:
+            generated_files["implementation"] = [
+                self.code_generator.generate_integer_axi(self.model, self.data_manager)
+            ]
+        else:
+            generated_files["headers"] = self.code_generator.generate_headers(self.model, self.data_manager)
+            generated_files["implementation"] = self.code_generator.generate_implementation(self.model, self.data_manager)
 
         if self._split_cache:
             _, x_test, _, _ = self._split_cache
         else:
             _, x_test, _, _ = self.data_manager.prepare_data()
-        generated_files["test"] = [
-            self.code_generator.generate_x_test_header(x_test),
-            self.code_generator.generate_rfr_tb(self._get_output_names(), self.config.config["model"]["task"]),
-        ]
+        if integer_axi:
+            generated_files["test"] = self.code_generator.generate_integer_testbench(self.model, x_test)
+        else:
+            generated_files["test"] = [
+                self.code_generator.generate_x_test_header(x_test),
+                self.code_generator.generate_rfr_tb(self._get_output_names(), self.config.config["model"]["task"]),
+            ]
+        self._integer_axi_export = integer_axi
 
         generated_files["build"] = self._generate_build_scripts()
         generated_files["vivado_tcl"] = [str(self._generate_vivado_tcl())]
-        generated_files["vivado_block_design"] = [self._generate_vivado_block_design_tcl()]
+        generated_files["vivado_block_design"] = (
+            [] if integer_axi else [self._generate_vivado_block_design_tcl()]
+        )
 
         logger.info(
             "Code generation completed. Files saved to: %s",
@@ -229,10 +251,14 @@ puts "SUCCESS: Build complete!"
         backend = self.config.backend
         tcl_path = output_dir / f"{project_name}.tcl"
 
-        cpp_files = sorted(output_dir.glob("*.cpp"))
-        header_files = sorted(output_dir.glob("*.h"))
-        tb_files = [file for file in cpp_files + header_files if "tb" in file.stem.lower() or "test" in file.stem.lower()]
-        design_files = [file for file in cpp_files + header_files if file not in tb_files]
+        if getattr(self, "_integer_axi_export", False):
+            design_files = [output_dir / "cambium_integer_axi.cpp"]
+            tb_files = [output_dir / "integer_axi_tb.cpp", output_dir / "integer_axi_vectors.txt"]
+        else:
+            cpp_files = sorted(output_dir.glob("*.cpp"))
+            header_files = sorted(output_dir.glob("*.h"))
+            tb_files = [file for file in cpp_files + header_files if "tb" in file.stem.lower() or "test" in file.stem.lower()]
+            design_files = [file for file in cpp_files + header_files if file not in tb_files]
 
         lines: List[str] = []
         lines.append("############################################################")
@@ -253,7 +279,7 @@ puts "SUCCESS: Build complete!"
         lines.extend(f'add_files [file join $script_dir "{file.name}"]' for file in design_files)
         lines.extend(f'add_files -tb [file join $script_dir "{file.name}"]' for file in tb_files)
 
-        if backend.is_vitis() and backend.config["flow_target"]:
+        if backend.is_vitis() and backend.config["flow_target"] and not getattr(self, "_integer_axi_export", False):
             lines.append(f'open_solution -flow_target {backend.config["flow_target"]} "solution1"')
         else:
             lines.append('open_solution "solution1"')
@@ -267,12 +293,15 @@ puts "SUCCESS: Build complete!"
         lines.append('#source "./solution1/directives.tcl"')
         lines.append("csim_design")
         lines.append("csynth_design")
-        if backend.is_vitis():
+        if getattr(self, "_integer_axi_export", False):
+            lines.append("cosim_design -rtl verilog")
+        elif backend.is_vitis():
             lines.append("# cosim_design is skipped by default for Vitis HLS")
         else:
             lines.append(f"cosim_design -trace_level {backend.config['cosim_trace']}")
         if backend.is_vitis():
-            lines.append(f"export_design -format {backend.config['export_format']}")
+            export_format = "ip_catalog" if getattr(self, "_integer_axi_export", False) else backend.config['export_format']
+            lines.append(f"export_design -format {export_format}")
         else:
             lines.append("export_design -format ip_catalog")
         lines.append("exit")

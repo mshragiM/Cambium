@@ -52,7 +52,7 @@ score_t traverse_tree_array(const feature_t features[N_FEATURES], const TreeData
 
     // First level outside loop for better optimization
     if (tree_data.is_leaf[current_node]) return tree_data.value[current_node];
-    ap_uint<3> feature_idx = tree_data.feature[current_node];
+    ap_uint<{{ feature_index_bits }}> feature_idx = tree_data.feature[current_node];
     threshold_t threshold = tree_data.threshold[current_node];
     current_node = (features[feature_idx] <= threshold) ? tree_data.left[current_node] : tree_data.right[current_node];
 
@@ -98,15 +98,14 @@ void predict_array(const input_t &input, result_t &output) {
     }
 {% else %}
 
-    score_t {% for i in range(n_targets) %}sum{{ i }} = 0{% if not loop.last %}, {% endif %}{% endfor %}; // PROPERLY initialized! // Single declaration
+    {{ accum_precision_type }} {% for i in range(n_targets) %}sum{{ i }} = 0{% if not loop.last %}, {% endif %}{% endfor %};
 
     // Main loop
     for (int i = 0; i < N_TREES_PER_TARGET; ++i) {
     #pragma HLS PIPELINE II=1
         {% for i in range(n_targets) %}score_t partial{{ i }} = traverse_tree_array(input.data, target_trees[{{ i }}][i]);
         {% endfor %}
-        {% for i in range(n_targets) %}#pragma HLS RESOURCE variable=sum{{ i }} core=AddSub_DSP latency=1
-        sum{{ i }} += partial{{ i }};
+        {% for i in range(n_targets) %}sum{{ i }} += partial{{ i }};
         {% endfor %}
     }
 
