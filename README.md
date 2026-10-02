@@ -90,14 +90,9 @@ This will:
 ### Vitis HLS regression and classification on AXI4-Stream
 
 For regression (one or several targets) and single-label classification,
-`--backend vitis_hls` now selects a
-primitive-ROM AXI implementation by default. Fixed-point models store tree
-thresholds and leaves as signed integer arrays; float models use primitive
-float arrays. This avoids the constant-zero RTL produced by the earlier
-aggregate tree representation in Vitis HLS 2024.1. The generated testbench
-checks fixed-point prediction codes exactly and float predictions to within
-`1e-5`; it checks `TLAST`, `TKEEP`, and `TSTRB` exactly in C and RTL
-co-simulation. A mismatch makes the HLS run fail.
+`--backend vitis_hls` generates an AXI4-Stream inference IP by default.
+Fixed-point and float precision are supported. The generated HLS project
+includes a testbench for prediction and AXI stream validation.
 
 ```bash
 cambium quick-start --data data.csv --features f1,f2 --targets y \
@@ -119,8 +114,8 @@ host if needed. Classification returns one score per class, in
 and output instead. Both paths produce an IP-catalog export for DMA integration.
 
 `--implementation auto` is the default; `--implementation struct` selects the
-older exporter. The integer path supports regression or classification and up
-to 32 total fixed-point bits. Vitis HLS 2024.1 C/RTL co-simulation has validated
+struct-based exporter. The integer path supports regression or classification
+and up to 32 total fixed-point bits. Vitis HLS 2024.1 C/RTL co-simulation has validated
 single-output regression and classification at `ap_fixed<10,4>` and float,
 regression at `ap_fixed<18,8>`, classification at `ap_fixed<16,6>`, and
 two-output regression at `ap_fixed<10,4>` and float. Other precisions and boards
