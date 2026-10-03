@@ -74,6 +74,36 @@ class IntegerAxiExportTests(unittest.TestCase):
             self.assertIn("export_design -format ip_catalog", tcl)
             self.assertNotIn("-flow_target vitis", tcl)
 
+    def test_zcu104_vitis_export_generates_dma_overlay_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            framework = self.make_framework(output, "struct")
+            framework.config.config["export"].update(
+                fpga_part="xczu7ev-ffvc1156-2-e", clock_period=5)
+            generated = framework.export_to_hls_j2()
+            self.assertEqual(len(generated["vivado_block_design"]), 1)
+            tcl = (output / "vivado_block_design.tcl").read_text()
+            self.assertIn("xilinx.com:zcu104:part0:1.1", tcl)
+            self.assertIn("CONFIG.c_include_sg {0}", tcl)
+            self.assertIn("predict_axi_0/in_r", tcl)
+            self.assertIn("predict_axi_0/out_r", tcl)
+            self.assertIn("ps/M_AXI_HPM0_FPD", tcl)
+            self.assertNotIn("ps/M_AXI_HPM1_FPD", tcl)
+            self.assertIn("validate_bd_design", tcl)
+            self.assertIn("output.bit", tcl)
+            self.assertIn("output.hwh", tcl)
+
+    def test_zcu104_overlay_command_reuses_saved_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            framework = self.make_framework(output, "struct")
+            framework.config.config["export"].update(
+                fpga_part="xczu7ev-ffvc1156-2-e", clock_period=5)
+            framework.config.save_config(str(output / "cambium_config.yaml"))
+            self.assertEqual(CambiumCLI().run([
+                "zcu104-overlay", "--output", str(output), "--quiet"]), 0)
+            self.assertTrue((output / "vivado_block_design.tcl").exists())
+
     def test_vivado_struct_keeps_original_tree_declarations(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)

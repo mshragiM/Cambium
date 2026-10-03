@@ -103,9 +103,14 @@ class CambiumFramework:
 
         generated_files["build"] = self._generate_build_scripts()
         generated_files["vivado_tcl"] = [str(self._generate_vivado_tcl())]
-        generated_files["vivado_block_design"] = (
-            [] if self.config.backend.is_vitis() else [self._generate_vivado_block_design_tcl()]
-        )
+        if self.config.backend.is_vitis():
+            part = self.config.config["export"].get("fpga_part", "")
+            generated_files["vivado_block_design"] = (
+                [self._generate_zcu104_block_design_tcl()]
+                if part == "xczu7ev-ffvc1156-2-e" else []
+            )
+        else:
+            generated_files["vivado_block_design"] = [self._generate_vivado_block_design_tcl()]
 
         logger.info(
             "Code generation completed. Files saved to: %s",
@@ -151,6 +156,106 @@ class CambiumFramework:
     def _generate_build_scripts(self) -> List[str]:
         # Placeholder for future build-script generation.
         return []
+
+    def _generate_zcu104_block_design_tcl(self) -> str:
+        """Generate a ZCU104 AXI DMA overlay for the Vitis HLS IP export."""
+        output_dir = Path(self.config.config["project"]["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        project_name = self.config.config["project"]["name"]
+        period = float(self.config.config["export"].get("clock_period", 5))
+        if period <= 0:
+            raise ValueError("export.clock_period must be positive")
+        frequency_mhz = 1000.0 / period
+
+        tcl_content = f'''# ZCU104 AXI4-Stream + simple-DMA overlay for Cambium.
+# Run after: vitis_hls -f {project_name}.tcl
+# Validate only: vivado -mode batch -source vivado_block_design.tcl -tclargs validate
+# Full build:    vivado -mode batch -source vivado_block_design.tcl
+set script_dir [file dirname [file normalize [info script]]]
+cd $script_dir
+set project_dir [file join $script_dir vivado_project]
+set ip_repo [file join $script_dir {project_name} solution1 impl ip]
+if {{![file exists [file join $ip_repo component.xml]]}} {{
+    error "HLS IP is missing at $ip_repo; run Vitis HLS first"
+}}
+create_project -force cambium_zcu104 $project_dir -part xczu7ev-ffvc1156-2-e
+set_param general.maxThreads 2
+set_property board_part xilinx.com:zcu104:part0:1.1 [current_project]
+set_property target_language Verilog [current_project]
+set_property ip_repo_paths [list $ip_repo] [current_project]
+update_ip_catalog
+
+create_bd_design design_1
+create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:* ps
+apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {{apply_board_preset "1"}} [get_bd_cells ps]
+set_property -dict [list \\
+    CONFIG.PSU__USE__M_AXI_GP1 {{0}} \\
+    CONFIG.PSU__USE__S_AXI_GP2 {{1}} \\
+    CONFIG.PSU__USE__S_AXI_GP3 {{1}} \\
+    CONFIG.PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ {{{frequency_mhz:g}}}] [get_bd_cells ps]
+
+create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dma:* axi_dma_0
+set_property -dict [list \\
+    CONFIG.c_include_sg {{0}} CONFIG.c_sg_length_width {{26}} \\
+    CONFIG.c_m_axi_mm2s_data_width {{32}} CONFIG.c_m_axi_s2mm_data_width {{32}} \\
+    CONFIG.c_m_axis_mm2s_tdata_width {{32}} CONFIG.c_s_axis_s2mm_tdata_width {{32}} \\
+    CONFIG.c_mm2s_burst_size {{256}} CONFIG.c_s2mm_burst_size {{256}}] [get_bd_cells axi_dma_0]
+create_bd_cell -type ip -vlnv xilinx.com:hls:predict_axi:1.0 predict_axi_0
+connect_bd_intf_net [get_bd_intf_pins axi_dma_0/M_AXIS_MM2S] [get_bd_intf_pins predict_axi_0/in_r]
+connect_bd_intf_net [get_bd_intf_pins predict_axi_0/out_r] [get_bd_intf_pins axi_dma_0/S_AXIS_S2MM]
+
+# One PS master controls the DMA. Two HP ports carry the two memory directions.
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {{Master "/ps/M_AXI_HPM0_FPD" Clk "Auto"}} [get_bd_intf_pins axi_dma_0/S_AXI_LITE]
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {{Master "/axi_dma_0/M_AXI_MM2S" Slave "/ps/S_AXI_HP0_FPD" Clk "Auto"}} [get_bd_intf_pins ps/S_AXI_HP0_FPD]
+apply_bd_automation -rule xilinx.com:bd_rule:axi4 -config {{Master "/axi_dma_0/M_AXI_S2MM" Slave "/ps/S_AXI_HP1_FPD" Clk "Auto"}} [get_bd_intf_pins ps/S_AXI_HP1_FPD]
+apply_bd_automation -rule xilinx.com:bd_rule:clkrst -config {{Clk "/ps/pl_clk0"}} [get_bd_pins predict_axi_0/ap_clk]
+
+# Prevent an unnoticed clock-domain change by connection automation.
+set pl_clock_net [get_bd_nets -of_objects [get_bd_pins ps/pl_clk0]]
+foreach clock_pin {{predict_axi_0/ap_clk axi_dma_0/s_axi_lite_aclk axi_dma_0/m_axi_mm2s_aclk axi_dma_0/m_axi_s2mm_aclk}} {{
+    set pin [get_bd_pins -quiet $clock_pin]
+    if {{[llength $pin] && [get_bd_nets -of_objects $pin] ne $pl_clock_net}} {{
+        error "Clock pin $clock_pin is not driven by ps/pl_clk0"
+    }}
+}}
+assign_bd_address
+validate_bd_design
+save_bd_design
+set bd_file [get_files design_1.bd]
+generate_target all $bd_file
+add_files -norecurse [make_wrapper -files $bd_file -top]
+set_property top design_1_wrapper [current_fileset]
+update_compile_order -fileset sources_1
+if {{[llength $argv] && [lindex $argv 0] eq "validate"}} {{
+    puts "SUCCESS: ZCU104 block design validated"
+    close_project
+    exit 0
+}}
+
+set report_dir [file join $script_dir vivado_reports]
+file mkdir $report_dir
+launch_runs synth_1 -jobs 2
+wait_on_run synth_1
+if {{[get_property PROGRESS [get_runs synth_1]] ne "100%"}} {{error "Synthesis failed"}}
+open_run synth_1
+report_utilization -file [file join $report_dir utilization_synth.rpt]
+report_power -file [file join $report_dir power_synth.rpt]
+launch_runs impl_1 -to_step write_bitstream -jobs 2
+wait_on_run impl_1
+if {{[get_property PROGRESS [get_runs impl_1]] ne "100%"}} {{error "Implementation failed"}}
+open_run impl_1
+report_timing_summary -file [file join $report_dir timing.rpt]
+report_utilization -file [file join $report_dir utilization_routed.rpt]
+report_power -file [file join $report_dir power_routed.rpt]
+file copy -force [file join [get_property DIRECTORY [get_runs impl_1]] design_1_wrapper.bit] [file join $script_dir output.bit]
+file copy -force [file join $project_dir cambium_zcu104.gen sources_1 bd design_1 hw_handoff design_1.hwh] [file join $script_dir output.hwh]
+puts "SUCCESS: output.bit and output.hwh generated in $script_dir"
+close_project
+'''
+        tcl_path = output_dir / "vivado_block_design.tcl"
+        tcl_path.write_text(tcl_content, encoding="utf-8")
+        logger.info("ZCU104 Vivado block design TCL generated: %s", tcl_path)
+        return str(tcl_path)
 
     def _generate_vivado_block_design_tcl(self) -> str:
         """Generate Vivado block design TCL for FPGA integration."""

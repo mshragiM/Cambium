@@ -243,7 +243,8 @@ After a successful quick start, `energy_pred/` will include files such as:
 - `X_test.npy`, `Y_test.npy`, `Y_pred.npy`
 - generated firmware/test C++ and headers
 - `<project_name>.tcl` (default: `cambium_project.tcl`)
-- `vivado_block_design.tcl` for the Vivado HLS flow only (Zynq-7000 template)
+- `vivado_block_design.tcl` for Vivado HLS (Zynq-7000 template), or for
+  Vitis HLS when `--fpga-part xczu7ev-ffvc1156-2-e` selects the ZCU104
 
 ## HLS / FPGA Flow
 
@@ -282,6 +283,33 @@ Then run:
 ```bash
 cd out_vitis
 vitis_hls -f cambium_project.tcl
+```
+
+For a ZCU104 export (`--fpga-part xczu7ev-ffvc1156-2-e`), Cambium also
+generates `vivado_block_design.tcl`. It uses the IP catalog produced by Vitis
+HLS and builds a ZCU104 processing-system, simple AXI DMA, and AXI4-Stream
+overlay without opening the Vivado GUI:
+
+```bash
+vivado -mode batch -source vivado_block_design.tcl
+```
+
+The script writes `output.bit`, `output.hwh`, and synthesis/routed reports to
+the export directory. To check only the block design before a full build, run
+`vivado -mode batch -source vivado_block_design.tcl -tclargs validate`.
+The generated clock request follows `--clock-period`; Vivado determines the
+achievable PS clock. Board software must pack one 32-bit AXI word per feature
+and receive one word per regression output or one score per class. The stream
+word encoding depends on the selected precision; it is not the hls4ml driver
+format for fixed-point Cambium models.
+
+For an existing ZCU104 Vitis export created before this script was added,
+generate only the overlay script without retraining or repeating HLS:
+
+```bash
+python cambium_cli.py zcu104-overlay --output energy_pred_zcu104
+cd energy_pred_zcu104
+vivado -mode batch -source vivado_block_design.tcl
 ```
 
 Notes:

@@ -109,6 +109,7 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         self._add_quickstart_parser(subparsers, parent_parser)
         self._add_config_parser(subparsers, parent_parser)
         self._add_synthesis_parser(subparsers, parent_parser)
+        self._add_overlay_parser(subparsers, parent_parser)
         return parser
 
     def _add_train_parser(self, subparsers, parent_parser) -> None:
@@ -203,6 +204,12 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         synth_parser = subparsers.add_parser("hls-report", help="Print Vivado/Vitis HLS synthesis summary", parents=[parent_parser])
         synth_parser.add_argument("--project-dir", "-p", default="cambium_output", help="HLS project directory")
 
+    def _add_overlay_parser(self, subparsers, parent_parser) -> None:
+        overlay_parser = subparsers.add_parser(
+            "zcu104-overlay", help="Generate a ZCU104 Vivado DMA build script for an existing Vitis HLS export",
+            parents=[parent_parser])
+        overlay_parser.add_argument("--output", "-o", required=True, help="Existing Cambium export directory")
+
     def run(self, args=None) -> int:
         args = self.parser.parse_args(args)
         self._configure_logging(args)
@@ -213,6 +220,7 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             "quick-start": self._handle_quickstart,
             "create-config": self._handle_create_config,
             "hls-report": self._handle_synthesis_report,
+            "zcu104-overlay": self._handle_zcu104_overlay,
         }
 
         if args.command not in handlers:
@@ -240,6 +248,22 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             datefmt="%Y-%m-%d %H:%M:%S",
             force=True,
         )
+
+    def _handle_zcu104_overlay(self, args) -> int:
+        output = Path(args.output)
+        config_path = output / "cambium_config.yaml"
+        if not config_path.is_file():
+            raise ValueError(f"Saved Cambium config not found: {config_path}")
+        framework = CambiumFramework(str(config_path))
+        if not framework.config.backend.is_vitis():
+            raise ValueError("ZCU104 overlay generation requires a Vitis HLS export")
+        if framework.config.config["export"].get("fpga_part") != "xczu7ev-ffvc1156-2-e":
+            raise ValueError("Saved export must target xczu7ev-ffvc1156-2-e")
+        framework.config.config["project"]["output_dir"] = str(output)
+        script = framework._generate_zcu104_block_design_tcl()
+        logger.info("Generated: %s", script)
+        logger.info("Run: cd %s && vivado -mode batch -source vivado_block_design.tcl", output)
+        return 0
 
     def _build_framework(self, args) -> CambiumFramework:
         if args.config:
@@ -422,6 +446,9 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             logger.info("\nTo run Vitis HLS synthesis:")
             logger.info("   cd %s", output_dir)
             logger.info("   vitis_hls -f %s.tcl", framework.config.config["project"]["name"])
+            if framework.config.config["export"].get("fpga_part") == "xczu7ev-ffvc1156-2-e":
+                logger.info("\nAfter HLS export, build the ZCU104 DMA overlay:")
+                logger.info("   vivado -mode batch -source vivado_block_design.tcl")
         else:
             logger.info("\nTo run Vivado HLS synthesis:")
             logger.info("   cd %s", output_dir)
