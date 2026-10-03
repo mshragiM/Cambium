@@ -102,26 +102,10 @@ cd forest_hls
 vitis_hls -f cambium_project.tcl
 ```
 
-The input is one 32-bit AXI4-Stream word per feature. Its low `W` bits contain
-a signed two's-complement fixed-point integer code for `ap_fixed<W,I>`; the
-remaining bits are ignored. Scale each already-preprocessed feature by
-`2^(W-I)` and round down before packing. Assert `TLAST` on the final feature
-of the final sample in a DMA batch. Each regression prediction or classification
-score is returned as one 32-bit word with the signed result code in the low
-`W` bits; decode it, divide by `2^(W-I)`, and undo target preprocessing on the
-host if needed. Classification returns one score per class, in
-`model.classes_` order. Float precision uses IEEE-754 binary32 words on input
-and output instead. Both paths produce an IP-catalog export for DMA integration.
+
 
 `--implementation auto` is the default; `--implementation struct` selects the
-struct-based exporter. The integer path supports regression or classification
-and up to 32 total fixed-point bits. Vitis HLS 2024.1 C/RTL co-simulation has validated
-single-output regression and classification at `ap_fixed<10,4>` and float,
-regression at `ap_fixed<18,8>`, classification at `ap_fixed<16,6>`, and
-two-output regression at `ap_fixed<10,4>` and float. Other precisions and boards
-require their own verification before deployment. The existing Vivado HLS
-export path remains available; Vivado HLS itself was not installed in this
-validation environment.
+struct-based exporter.
 
 Tree count (`--n-estimators`) and maximum depth (`--max-depth`) control the
 trained model. `--max-leaf-nodes` caps the number of leaves per trained tree.
