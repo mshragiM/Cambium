@@ -13,7 +13,7 @@ from cambium.cli import CambiumCLI
 
 
 class IntegerAxiExportTests(unittest.TestCase):
-    def make_framework(self, output, implementation="auto"):
+    def make_framework(self, output, implementation="integer_axi"):
         x = np.array([[-1.0, 0.5], [-0.5, -0.5], [0.0, 0.2],
                       [0.5, -0.2], [1.0, 0.9], [1.5, -0.9]], dtype=np.float32)
         y = np.array([-0.75, -0.4, 0.15, 0.4, 0.85, 0.95], dtype=np.float32)
@@ -31,7 +31,7 @@ class IntegerAxiExportTests(unittest.TestCase):
         framework._split_cache = (x, x, y, y)
         return framework
 
-    def test_auto_export_has_strict_rom_testbench_and_cosimulation(self):
+    def test_explicit_integer_export_has_strict_rom_testbench_and_cosimulation(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp)
             generated = self.make_framework(output).export_to_hls_j2()
@@ -57,6 +57,33 @@ class IntegerAxiExportTests(unittest.TestCase):
             self.assertIn("myproj_core.cpp", [Path(p).name for p in generated["implementation"]])
             self.assertNotIn("integer_axi_vectors.txt", (output / "cambium_project.tcl").read_text())
 
+    def test_auto_vitis_uses_original_struct_core_with_direct_tree_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            framework = self.make_framework(output, "auto")
+            framework.config.config["export"]["hls_test_samples"] = 3
+            generated = framework.export_to_hls_j2()
+            self.assertIn("myproj_core.cpp", [Path(p).name for p in generated["implementation"]])
+            self.assertIn("const TreeData target_trees", (output / "model_predict.cpp").read_text())
+            self.assertNotIn("target0_tree0", (output / "model_predict.cpp").read_text())
+            self.assertNotIn("static const TreeData", (output / "rf_trees_array.h").read_text())
+            self.assertIn("#define X_TEST_SAMPLES 3", (output / "X_test.h").read_text())
+            self.assertIn("return 1;", (output / "rfr_tb.cpp").read_text())
+            tcl = (output / "cambium_project.tcl").read_text()
+            self.assertIn("cosim_design -rtl verilog", tcl)
+            self.assertIn("export_design -format ip_catalog", tcl)
+            self.assertNotIn("-flow_target vitis", tcl)
+
+    def test_vivado_struct_keeps_original_tree_declarations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            framework = self.make_framework(output, "auto")
+            framework.config.set_backend("vivado_hls")
+            framework.export_to_hls_j2()
+            self.assertIn("static const TreeData target0_tree0", (output / "rf_trees_array.h").read_text())
+            self.assertIn("target0_tree0", (output / "model_predict.cpp").read_text())
+            self.assertIn("#define X_TEST_SAMPLES 6", (output / "X_test.h").read_text())
+
     def test_test_vector_overflow_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             framework = self.make_framework(Path(tmp))
@@ -66,7 +93,7 @@ class IntegerAxiExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "overflows"):
                 framework.export_to_hls_j2()
 
-    def test_default_fixed_precision_exports_integer_axi(self):
+    def test_explicit_integer_fixed_precision_exports_integer_axi(self):
         with tempfile.TemporaryDirectory() as tmp:
             framework = self.make_framework(Path(tmp))
             framework.config.config["export"]["precision"] = "fixed"
@@ -99,6 +126,7 @@ class IntegerAxiExportTests(unittest.TestCase):
                 output = Path(tmp)
                 framework = self.make_framework(output)
                 framework.config.config["export"]["precision"] = "float"
+                framework.config.config["export"]["implementation"] = "float_axi"
                 if classification:
                     x = framework._split_cache[1]
                     model = RandomForestClassifier(n_estimators=3, max_depth=3, random_state=42)
@@ -144,6 +172,9 @@ class IntegerAxiExportTests(unittest.TestCase):
                 framework.model = model
                 framework.data_manager.target_cols = ["y1", "y2"]
                 framework.config.config["export"]["precision"] = precision
+                framework.config.config["export"]["implementation"] = (
+                    "float_axi" if precision == "float" else "integer_axi"
+                )
                 generated = framework.export_to_hls_j2()
                 name = "float" if precision == "float" else "integer"
                 vectors = np.loadtxt(output / f"{name}_axi_vectors.txt")

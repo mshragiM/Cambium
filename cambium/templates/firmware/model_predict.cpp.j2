@@ -3,9 +3,35 @@
 #include "rf_trees_array.h"
 
 // Define target_trees
+{% if is_vitis %}
+// Initialize the final array directly: Vitis HLS must see the tree values at this declaration.
+{% endif %}
 const TreeData target_trees[N_FORESTS][N_TREES_PER_TARGET] = {
+{% if is_vitis %}
+{% for target_idx in range(n_forests) %}
+    // Forest {{ target_idx }}: {{ forest_names[target_idx] if forest_names else target_idx }}
+    {
+{% for tree in tree_data[target_idx] %}
+        {
+            { {% for val in tree.features %}{{ val }}{% if not loop.last %}, {% endif %}{% endfor %} },
+            { {% for val in tree.thresholds %}{{ "%.6f"|format(val) }}f{% if not loop.last %}, {% endif %}{% endfor %} },
+{% if is_classification %}
+            { {% for row in tree.node_values %}{ {% for val in row %}{{ "%.6f"|format(val) }}f{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %}, {% endif %}{% endfor %} },
+{% else %}
+            { {% for val in tree.node_values %}{{ "%.6f"|format(val) }}f{% if not loop.last %}, {% endif %}{% endfor %} },
+{% endif %}
+            { {% for val in tree.left_children %}{{ val }}{% if not loop.last %}, {% endif %}{% endfor %} },
+            { {% for val in tree.right_children %}{{ val }}{% if not loop.last %}, {% endif %}{% endfor %} },
+            { {% for val in tree.is_leaf %}{{ val }}{% if not loop.last %}, {% endif %}{% endfor %} },
+            {{ tree.n_nodes }}
+        }{% if not loop.last %},{% endif %}
+{% endfor %}
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+{% else %}
 {% for target_idx in range(n_forests) %}
     // Forest {{ target_idx }}: {{ forest_names[target_idx] if forest_names else target_idx }}
     { {% for tree_name in target_trees_list[target_idx] %}{{ tree_name }}{% if not loop.last %}, {% endif %}{% endfor %} }{% if not loop.last %},{% endif %}
 {% endfor %}
+{% endif %}
 };

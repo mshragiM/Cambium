@@ -73,7 +73,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     csv_out << "{{ csv_header }}\n";
-    bool error_found = false;
 
     float min_val[N_TARGETS], max_val[N_TARGETS];
     for (int i = 0; i < N_TARGETS; ++i) {
@@ -109,7 +108,7 @@ int main(int argc, char* argv[]) {
                 bool(pkt.last) != expected_last || pkt.keep != 0xF || pkt.strb != 0xF) {
                 std::cout << "ERROR: Mismatch at sample " << s + 1 << ", target " << target_names[t] << ":\n";
                 std::cout << "  predict_axi: " << axi_val << ", ref: " << ref_val << "\n";
-                error_found = true;
+                return 1;
             }
 
             if (s < 3 || s >= n_samples - 3) {
@@ -137,12 +136,7 @@ int main(int argc, char* argv[]) {
                 << min_val[i] << " to " << max_val[i] << std::endl;
     }
 
-    if (error_found) {
-        std::cerr << "ERROR: Simulation failed due to prediction mismatches.\n";
-        return 1;
-    } else {
-        std::cout << "All predictions and AXI sidebands match exactly.\n";
-    }
+    std::cout << "All predictions and AXI sidebands match exactly.\n";
 
     return 0;
 }

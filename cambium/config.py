@@ -100,6 +100,7 @@ class CambiumConfig:
                 "optimization": "speed",
                 "format": "default",
                 "implementation": "auto",
+                "hls_test_samples": 32,
             },
             "hls": {
                 "backend": "vivado_hls",

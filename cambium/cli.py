@@ -157,7 +157,9 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         export_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], help="HLS synthesis backend")
         export_parser.add_argument("--max-nodes", type=int, help="Minimum HLS node-array capacity per tree")
         export_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi", "float_axi"],
-                                   help="HLS datapath (auto selects primitive ROM AXI for Vitis models)")
+                                   help="HLS datapath (auto selects the original struct implementation)")
+        export_parser.add_argument("--hls-test-samples", type=int,
+                                   help="Number of saved test vectors used by the Vitis struct HLS testbench (default: 32)")
         export_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
 
     def _add_quickstart_parser(self, subparsers, parent_parser) -> None:
@@ -184,7 +186,9 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
         quick_parser.add_argument("--config", "-c", help="Configuration file (YAML/JSON)")
         quick_parser.add_argument("--backend", choices=["vivado_hls", "vitis_hls"], default="vivado_hls", help="HLS synthesis backend")
         quick_parser.add_argument("--implementation", choices=["auto", "struct", "integer_axi", "float_axi"],
-                                  help="HLS datapath (auto selects primitive ROM AXI for Vitis models)")
+                                  help="HLS datapath (auto selects the original struct implementation)")
+        quick_parser.add_argument("--hls-test-samples", type=int,
+                                  help="Number of saved test vectors used by the Vitis struct HLS testbench (default: 32)")
         quick_parser.add_argument("--vitis-flow", choices=["hw", "hw_emu"], default="hw", help="Vitis flow target")
         quick_parser.add_argument("--fpga-part", type=str, help="FPGA part number override")
         quick_parser.add_argument("--clock-period", type=float, help="Clock period in ns")
@@ -279,6 +283,10 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             framework.config.config["model"]["max_leaf_nodes"] = args.max_leaf_nodes
         if getattr(args, "implementation", None):
             framework.config.config["export"]["implementation"] = args.implementation
+        if getattr(args, "hls_test_samples", None) is not None:
+            if args.hls_test_samples < 1:
+                raise ValueError("--hls-test-samples must be positive")
+            framework.config.config["export"]["hls_test_samples"] = args.hls_test_samples
         return framework
 
     def _handle_train(self, args) -> int:

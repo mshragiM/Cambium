@@ -105,11 +105,17 @@ vitis_hls -f cambium_project.tcl
 
 `--backend` selects `vitis_hls` or `vivado_hls`. `--precision 18.8` means
 `ap_fixed<18,8>`; `--precision float` selects single-precision floating point.
-For Vitis, the default `--implementation auto` selects the AXI4-Stream exporter,
-so `--implementation integer_axi` is not needed for this command. The generated
-TCL runs C simulation, synthesis, RTL co-simulation, and IP export. Check that
+The default `--implementation auto` uses Cambium's original struct-based
+tree traversal and AXI4-Stream dataflow implementation. The generated TCL
+runs C simulation, synthesis, RTL co-simulation, and IP export. Check that
 each stage passes before integrating the IP with DMA in Vivado. HLS export
 alone does not create a ZCU104 bitstream or measure board performance.
+
+For Vitis, the HLS testbench checks the first 32 saved holdout vectors by
+default and stops at the first exact output or AXI sideband mismatch. Use
+`--hls-test-samples N` to change that count. The Python metrics and saved
+`X_test.npy` still cover the full holdout set. The shorter HLS check detects
+hardware conversion failures quickly; it is not a full-board accuracy result.
 
 The `--fpga-part` option is important: without it, the generated project uses
 the framework's default `xc7z020clg400-1`, which is **not** the ZCU104. The
@@ -134,7 +140,8 @@ driver for deployment.
 | `--fpga-part` | Set the target device for a Vitis `quick-start` export. |
 | `--clock-period` | Set the Vitis HLS clock target in nanoseconds. |
 | `--n-estimators`, `--max-depth`, `--max-leaf-nodes` | Set tree count and tree complexity. |
-| `--implementation` | Usually leave at `auto`; `integer_axi` and `float_axi` explicitly select the Vitis stream exporters. |
+| `--implementation` | `auto` selects the original struct core; `integer_axi` and `float_axi` are optional alternative Vitis exporters. |
+| `--hls-test-samples` | Limit vectors in the Vitis struct C/RTL testbench; default 32. |
 | `--output` | Choose a new directory for generated files and reports. |
 
 Cambium supports precision overrides directly from the CLI.
@@ -231,7 +238,7 @@ After a successful quick start, `energy_pred/` will include files such as:
 - `X_test.npy`, `Y_test.npy`, `Y_pred.npy`
 - generated firmware/test C++ and headers
 - `<project_name>.tcl` (default: `cambium_project.tcl`)
-- `vivado_block_design.tcl`
+- `vivado_block_design.tcl` for the Vivado HLS flow only (Zynq-7000 template)
 
 ## HLS / FPGA Flow
 

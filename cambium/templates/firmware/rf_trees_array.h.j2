@@ -5,6 +5,7 @@
 #include "ap_fixed.h"
 #include "ap_int.h"
 
+{% if not is_vitis %}
 {% for target_idx in range(n_forests) %}
 {% for tree_idx in range(n_trees_per_target) %}
 {% set tree = tree_data[target_idx][tree_idx] %}
@@ -35,6 +36,7 @@ static const TreeData target{{ target_idx }}_tree{{ tree_idx }} = {
 };
 {% endfor %}
 {% endfor %}
+{% endif %}
 
 // Declare target_trees
 extern const TreeData target_trees[{{ n_forests }}][{{ n_trees_per_target }}];

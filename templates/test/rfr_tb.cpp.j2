@@ -32,7 +32,6 @@ int main(int argc, char* argv[]) {
     }
 
     const char* target_names[] = { {% for name in target_names %}"{{ name }}"{% if not loop.last %}, {% endif %}{% endfor %} };
-    const float tolerance = {% if is_classification %}0.05{% else %}1.0{% endif %};
 
     const int x_test_rows = X_TEST_SAMPLES;
     if (n_samples > x_test_rows) {
@@ -74,7 +73,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     csv_out << "{{ csv_header }}\n";
-    bool error_found = false;
 
     float min_val[N_TARGETS], max_val[N_TARGETS];
     for (int i = 0; i < N_TARGETS; ++i) {
@@ -105,10 +103,12 @@ int main(int argc, char* argv[]) {
             if (axi_val < min_val[t]) min_val[t] = axi_val;
             if (axi_val > max_val[t]) max_val[t] = axi_val;
 
-            if (std::abs(axi_val - ref_val) > tolerance) {
+            const bool expected_last = (s == n_samples - 1 && t == N_TARGETS - 1);
+            if (pkt.data != score_to_bits(ref_output.data[t]) ||
+                bool(pkt.last) != expected_last || pkt.keep != 0xF || pkt.strb != 0xF) {
                 std::cout << "ERROR: Mismatch at sample " << s + 1 << ", target " << target_names[t] << ":\n";
                 std::cout << "  predict_axi: " << axi_val << ", ref: " << ref_val << "\n";
-                error_found = true;
+                return 1;
             }
 
             if (s < 3 || s >= n_samples - 3) {
@@ -136,12 +136,7 @@ int main(int argc, char* argv[]) {
                 << min_val[i] << " to " << max_val[i] << std::endl;
     }
 
-    if (error_found) {
-        std::cerr << "ERROR: Simulation failed due to prediction mismatches.\n";
-        return 1;
-    } else {
-        std::cout << "All predictions match within tolerance.\n";
-    }
+    std::cout << "All predictions and AXI sidebands match exactly.\n";
 
     return 0;
 }
