@@ -106,30 +106,24 @@ vitis_hls -f cambium_project.tcl
 `--backend` selects `vitis_hls` or `vivado_hls`. `--precision 18.8` means
 `ap_fixed<18,8>`; `--precision float` selects single-precision floating point.
 The default `--implementation auto` uses Cambium's original struct-based
-tree traversal and AXI4-Stream dataflow implementation. The generated TCL
-runs C simulation, synthesis, RTL co-simulation, and IP export. Check that
-each stage passes before integrating the IP with DMA in Vivado. HLS export
-alone does not create a ZCU104 bitstream or measure board performance.
+tree traversal and AXI4-Stream dataflow implementation.
 
 For Vitis, the HLS testbench checks the first 32 saved holdout vectors by
 default and stops at the first exact output or AXI sideband mismatch. Use
 `--hls-test-samples N` to change that count. The Python metrics and saved
-`X_test.npy` still cover the full holdout set. The shorter HLS check detects
-hardware conversion failures quickly; it is not a full-board accuracy result.
+`X_test.npy` 
 
 The `--fpga-part` option is important: without it, the generated project uses
-the framework's default `xc7z020clg400-1`, which is **not** the ZCU104. The
-`--clock-period` value is a design target in nanoseconds, not a measured board
+the framework's default `xc7z020clg400-1`. The
+`--clock-period` value is a design target in nanoseconds
 clock. Change `--n-estimators`, `--max-depth`, or `--max-leaf-nodes` to control
 forest size; `--max-nodes` only sets a minimum exported array capacity. For
 classification, set `--task classification` and one target column. For
 multi-output regression, list target columns in `--targets`.
 
 The saved `scaler_x.pkl`, `scaler_y.pkl`, and `cambium_config.yaml` describe the
-preprocessing needed by a host application. The generated testbench demonstrates
-the AXI word format and writes decoded simulation predictions to `Y_hls_pred.csv`.
-The exported IP still requires a board-specific Vivado block design and DMA
-driver for deployment.
+preprocessing needed by a host application. The generated testbench writes decoded simulation predictions to `Y_hls_pred.csv`.
+
 
 | Option | Use |
 | --- | --- |
@@ -159,7 +153,18 @@ Example:
 ```bash
 python cambium_cli.py quick-start --data https://raw.githubusercontent.com/AbuAli3/ee/main/alldata.csv --features Occupancy,Rel_Hum,Room_Temp,Air_Flow_Rat,Air_Temp --targets Elec_Cons --output energy_pred_p188 --backend vivado_hls --precision 18.8 --verbose
 ```
-
+# 5. Run with the larger test set
+```bash
+python3 cambium_cli.py quick-start \
+  --data alldata.csv \
+  --features Occupancy,Rel_Hum,Room_Temp,Air_Flow_Rat,Air_Temp \
+  --targets Elec_Cons --task regression \
+  --backend vitis_hls --precision 18.8 \
+  --fpga-part xczu7ev-ffvc1156-2-e --clock-period 5 \
+  --n-estimators 20 --max-depth 6 \
+  --hls-test-samples 1500 \
+  --output energy_pred_zcu104
+```
 ## Main CLI Commands
 
 ### 1) Quick start
