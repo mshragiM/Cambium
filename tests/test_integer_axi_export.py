@@ -2,6 +2,10 @@
 
 import tempfile
 import unittest
+import importlib.util
+import sys
+import types
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -92,6 +96,42 @@ class IntegerAxiExportTests(unittest.TestCase):
             self.assertIn("validate_bd_design", tcl)
             self.assertIn("output.bit", tcl)
             self.assertIn("output.hwh", tcl)
+            driver_path = output / "axi_rfr_driver.py"
+            spec = importlib.util.spec_from_file_location("generated_driver", driver_path)
+            driver = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(driver)
+            self.assertEqual((driver.N_FEATURES, driver.N_TARGETS), (2, 1))
+            self.assertEqual((driver.FIXED_POINT_BITS, driver.FEATURE_INT_BITS), (10, 4))
+            self.assertEqual(driver.encode_fixed_point([-0.5, 0.5]).tolist(), [992, 32])
+            np.testing.assert_allclose(
+                driver.decode_fixed_point(np.array([992, 32], dtype=np.uint32)),
+                [-0.5, 0.5])
+            class Buffer(np.ndarray):
+                def flush(self):
+                    pass
+                def invalidate(self):
+                    pass
+                def freebuffer(self):
+                    pass
+
+            class Channel:
+                def transfer(self, buffer):
+                    self.buffer = buffer
+                def wait(self):
+                    pass
+
+            class DMA:
+                sendchannel = Channel()
+                recvchannel = Channel()
+
+            fake_pynq = types.ModuleType("pynq")
+            fake_pynq.Overlay = lambda bitfile: types.SimpleNamespace(axi_dma_0=DMA())
+            fake_pynq.allocate = lambda shape, dtype: np.zeros(shape, dtype=dtype).view(Buffer)
+            with patch.dict(sys.modules, {"pynq": fake_pynq}):
+                overlay = driver.rfrOverlay("output.bit", (6, 2), (6,))
+                prediction = overlay.predict(np.zeros((6, 2)), scaled=True, denorm=False)
+                self.assertEqual(prediction.shape, (6, 1))
+                overlay.cleanup()
 
     def test_zcu104_overlay_command_reuses_saved_export(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -242,6 +242,8 @@ After a successful quick start, `energy_pred/` will include files such as:
 - `cambium_report.md`
 - `X_test.npy`, `Y_test.npy`, `Y_pred.npy`
 - generated firmware/test C++ and headers
+- `axi_rfr_driver.py` with the exported model's feature/output counts,
+  precision, and preprocessing constants for PYNQ DMA inference
 - `<project_name>.tcl` (default: `cambium_project.tcl`)
 - `vivado_block_design.tcl` for Vivado HLS (Zynq-7000 template), or for
   Vitis HLS when `--fpga-part xczu7ev-ffvc1156-2-e` selects the ZCU104
@@ -311,6 +313,14 @@ python cambium_cli.py zcu104-overlay --output energy_pred_zcu104
 cd energy_pred_zcu104
 vivado -mode batch -source vivado_block_design.tcl
 ```
+
+That command also refreshes `axi_rfr_driver.py` from the saved model and
+scalers. Copy the driver alongside `output.bit`, `output.hwh`, and the test
+arrays on the ZCU104. For this regression model, `predict(X_test, scaled=True,
+denorm=True)` accepts already scaled features and returns predictions in the
+original target units. Use `denorm=False` to compare against the saved scaled
+`Y_test.npy`. `profile=True` reports only the timed DMA transfer and waits;
+it does not include input conversion or output decoding.
 
 Notes:
 

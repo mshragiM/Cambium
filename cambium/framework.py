@@ -111,6 +111,7 @@ class CambiumFramework:
             )
         else:
             generated_files["vivado_block_design"] = [self._generate_vivado_block_design_tcl()]
+        generated_files["pynq_driver"] = [self._generate_pynq_driver()]
 
         logger.info(
             "Code generation completed. Files saved to: %s",
@@ -156,6 +157,48 @@ class CambiumFramework:
     def _generate_build_scripts(self) -> List[str]:
         # Placeholder for future build-script generation.
         return []
+
+    def _generate_pynq_driver(self) -> str:
+        """Write a driver with the exact model dimensions, precision and scalers."""
+        output_dir = Path(self.config.config["project"]["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        precision = self.code_generator.precision_type if self.code_generator else self.config.config["export"]["precision"]
+        if precision == "fixed":
+            precision = "ap_fixed<16,6>"
+        if precision == "float":
+            width, integer_bits, is_float = 32, 32, True
+        else:
+            width, integer_bits = Jinja2HLSCodeGenerator._parse_ap_fixed_type(precision)
+            is_float = False
+
+        scaler_x = self.data_manager.scaler_x
+        if scaler_x is None:
+            x_spec = {"kind": "identity"}
+        elif hasattr(scaler_x, "data_min_"):
+            x_spec = {"kind": "minmax", "scale": scaler_x.scale_.tolist(),
+                      "offset": scaler_x.min_.tolist()}
+        elif hasattr(scaler_x, "mean_"):
+            x_spec = {"kind": "standard", "center": scaler_x.mean_.tolist(),
+                      "scale": scaler_x.scale_.tolist()}
+        elif hasattr(scaler_x, "center_"):
+            x_spec = {"kind": "robust", "center": scaler_x.center_.tolist(),
+                      "scale": scaler_x.scale_.tolist()}
+        else:
+            raise ValueError("Cannot generate PYNQ driver for this feature scaler")
+        scaler_y = self.data_manager.scaler_y
+        y_spec = None if scaler_y is None else {
+            "min": scaler_y.data_min_.tolist(), "range": scaler_y.data_range_.tolist()}
+        spec = {
+            "n_features": len(self.data_manager.feature_cols),
+            "n_targets": len(self._get_output_names()),
+            "width": width, "int_bits": integer_bits, "float": is_float,
+            "x_scaler": x_spec, "y_scaler": y_spec,
+        }
+        source = (Path(__file__).with_name("pynq_driver_runtime.py")).read_text(encoding="utf-8")
+        driver_path = output_dir / "axi_rfr_driver.py"
+        driver_path.write_text(source.replace("MODEL_CONFIG = {}", f"MODEL_CONFIG = {spec!r}", 1),
+                               encoding="utf-8")
+        return str(driver_path)
 
     def _generate_zcu104_block_design_tcl(self) -> str:
         """Generate a ZCU104 AXI DMA overlay for the Vitis HLS IP export."""

@@ -261,6 +261,19 @@ cambium quick-start --data data.csv --config cambium_config_vitis.yaml
             raise ValueError("Saved export must target xczu7ev-ffvc1156-2-e")
         framework.config.config["project"]["output_dir"] = str(output)
         script = framework._generate_zcu104_block_design_tcl()
+        model_path = output / "cambium_model.pkl"
+        if model_path.is_file():
+            with model_path.open("rb") as file:
+                framework.model = pickle.load(file)
+            framework.data_manager.feature_cols = list(framework.config.config["data"].get("feature_cols") or [])
+            framework.data_manager.target_cols = list(framework.config.config["data"].get("target_cols") or [])
+            for name in ("scaler_x", "scaler_y"):
+                path = output / f"{name}.pkl"
+                if path.is_file():
+                    with path.open("rb") as file:
+                        setattr(framework.data_manager, name, pickle.load(file))
+            driver = framework._generate_pynq_driver()
+            logger.info("Generated: %s", driver)
         logger.info("Generated: %s", script)
         logger.info("Run: cd %s && vivado -mode batch -source vivado_block_design.tcl", output)
         return 0
