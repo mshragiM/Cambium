@@ -48,6 +48,7 @@ class IntegerAxiExportTests(unittest.TestCase):
             tb = (output / "integer_axi_tb.cpp").read_text()
             self.assertIn("int(actual) != expected", tb)
             self.assertIn("result.keep != 15", tb)
+            self.assertIn('std::ofstream predictions("Y_hls_pred.csv")', tb)
 
     def test_explicit_struct_export_keeps_legacy_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -110,6 +111,8 @@ class IntegerAxiExportTests(unittest.TestCase):
                 vectors = np.loadtxt(output / "float_axi_vectors.txt")
                 self.assertEqual(vectors.shape, (6, 5 if classification else 3))
                 self.assertIn("cosim_design -rtl verilog", (output / "cambium_project.tcl").read_text())
+                self.assertIn('std::ofstream predictions("Y_hls_pred.csv")',
+                              (output / "float_axi_tb.cpp").read_text())
 
     def test_tree_depth_and_node_controls_remain_independent(self):
         cli = CambiumCLI()

@@ -13,6 +13,13 @@ int main() {
         std::cerr << "ERROR: integer_axi_vectors.txt is missing\n";
         return 1;
     }
+    std::ofstream predictions("Y_hls_pred.csv");
+    if (!predictions) return 7;
+    for (int c = 0; c < {{ n_outputs }}; ++c) {
+        if (c) predictions << ',';
+        predictions << "output_" << c;
+    }
+    predictions << '\n';
     hls::stream<axis_t> input, output;
     int count = 0;
     while (count < {{ n_samples }}) {
@@ -45,7 +52,10 @@ int main() {
                           << " expected=" << expected[c] << "\n";
                 return 5;
             }
+            if (c) predictions << ',';
+            predictions << (double(int(actual)) / double(1ULL << {{ fractional_bits }}));
         }
+        predictions << '\n';
         ++count;
     }
     int extra;

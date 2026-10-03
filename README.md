@@ -85,32 +85,57 @@ This will:
 - save model + metrics
 - generate HLS files and TCL scripts in `energy_pred/`
 
-## Precision Support
+## Vitis HLS on ZCU104
 
-### Vitis HLS regression and classification on AXI4-Stream
-
-For regression (one or several targets) and single-label classification,
-`--backend vitis_hls` generates an AXI4-Stream inference IP by default.
-Fixed-point and float precision are supported. The generated HLS project
-includes a testbench for prediction and AXI stream validation.
+The following example trains a five-feature, single-output regression model,
+generates an AXI4-Stream HLS project, and targets the ZCU104 device. Run it
+from the repository root with the dependencies and Vitis HLS installed.
 
 ```bash
-cambium quick-start --data data.csv --features f1,f2 --targets y \
-  --backend vitis_hls --precision 10.4 --implementation integer_axi \
-  --output forest_hls
-cd forest_hls
+python cambium_cli.py quick-start \
+  --data https://raw.githubusercontent.com/AbuAli3/ee/main/alldata.csv \
+  --features Occupancy,Rel_Hum,Room_Temp,Air_Flow_Rat,Air_Temp \
+  --targets Elec_Cons --task regression \
+  --backend vitis_hls --precision 18.8 \
+  --fpga-part xczu7ev-ffvc1156-2-e --clock-period 5 \
+  --n-estimators 20 --max-depth 6 --output energy_pred_zcu104
+cd energy_pred_zcu104
 vitis_hls -f cambium_project.tcl
 ```
 
+`--backend` selects `vitis_hls` or `vivado_hls`. `--precision 18.8` means
+`ap_fixed<18,8>`; `--precision float` selects single-precision floating point.
+For Vitis, the default `--implementation auto` selects the AXI4-Stream exporter,
+so `--implementation integer_axi` is not needed for this command. The generated
+TCL runs C simulation, synthesis, RTL co-simulation, and IP export. Check that
+each stage passes before integrating the IP with DMA in Vivado. HLS export
+alone does not create a ZCU104 bitstream or measure board performance.
 
+The `--fpga-part` option is important: without it, the generated project uses
+the framework's default `xc7z020clg400-1`, which is **not** the ZCU104. The
+`--clock-period` value is a design target in nanoseconds, not a measured board
+clock. Change `--n-estimators`, `--max-depth`, or `--max-leaf-nodes` to control
+forest size; `--max-nodes` only sets a minimum exported array capacity. For
+classification, set `--task classification` and one target column. For
+multi-output regression, list target columns in `--targets`.
 
-`--implementation auto` is the default; `--implementation struct` selects the
-struct-based exporter.
+The saved `scaler_x.pkl`, `scaler_y.pkl`, and `cambium_config.yaml` describe the
+preprocessing needed by a host application. The generated testbench demonstrates
+the AXI word format and writes decoded simulation predictions to `Y_hls_pred.csv`.
+The exported IP still requires a board-specific Vivado block design and DMA
+driver for deployment.
 
-Tree count (`--n-estimators`) and maximum depth (`--max-depth`) control the
-trained model. `--max-leaf-nodes` caps the number of leaves per trained tree.
-`--max-nodes` sets the minimum HLS array capacity; Cambium increases it when
-the trained tree needs more nodes, so it is not a training limit.
+| Option | Use |
+| --- | --- |
+| `--data`, `--features`, `--targets` | Select the CSV or URL, ordered input columns, and target column(s). |
+| `--task` | Choose `regression` or `classification`; classification accepts one target column. |
+| `--backend` | Choose `vitis_hls` or `vivado_hls`. |
+| `--precision` | Choose `float`, `fixed`, or a fixed-point format such as `18.8`. |
+| `--fpga-part` | Set the target device for a Vitis `quick-start` export. |
+| `--clock-period` | Set the Vitis HLS clock target in nanoseconds. |
+| `--n-estimators`, `--max-depth`, `--max-leaf-nodes` | Set tree count and tree complexity. |
+| `--implementation` | Usually leave at `auto`; `integer_axi` and `float_axi` explicitly select the Vitis stream exporters. |
+| `--output` | Choose a new directory for generated files and reports. |
 
 Cambium supports precision overrides directly from the CLI.
 
@@ -225,15 +250,19 @@ python cambium_cli.py quick-start --data https://raw.githubusercontent.com/AbuAl
 
 ### Bitstream generation (Vivado batch)
 
+The generated `vivado_block_design.tcl` uses a Zynq-7000 processing-system
+template. It is not a ZCU104 deployment script; for ZCU104, integrate the
+exported IP into a Zynq UltraScale+ block design with AXI DMA first.
+
 ```bash
 cd energy_pred
 vivado -mode batch -source vivado_block_design.tcl
 ```
 
-### Vitis HLS (optional)
+### Vitis HLS
 
 ```bash
-python cambium_cli.py quick-start --data data.csv --features f1,f2 --targets y --backend vitis_hls --output out_vitis --precision 18.8
+python cambium_cli.py quick-start --data data.csv --features f1,f2 --targets y --backend vitis_hls --precision 18.8 --fpga-part xczu7ev-ffvc1156-2-e --output out_vitis
 ```
 
 Then run:

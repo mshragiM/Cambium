@@ -405,7 +405,7 @@ class Jinja2HLSCodeGenerator(CodeGenerator):
         testbench = self.output_dir / 'integer_axi_tb.cpp'
         rendered = self.env.get_template('test/integer_axi_tb.cpp.j2').render(
             n_features=x.shape[1], n_samples=len(x), n_outputs=n_outputs,
-            fixed_total_bits=total_bits)
+            fixed_total_bits=total_bits, fractional_bits=total_bits - int_bits)
         testbench.write_text(rendered, encoding='utf-8')
         return [str(testbench), str(vectors)]
 
